@@ -3,10 +3,6 @@ package com.example.todomoji.data
 import android.content.Context
 import android.net.Uri
 import com.example.todomoji.Supa
-import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.realtime.PostgresAction
-import io.github.jan.supabase.realtime.channel
-import io.github.jan.supabase.storage.from
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -19,26 +15,19 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
 // For SupabaseTaskRepository.kt (or wherever used)
-import io.github.jan.supabase.postgrest.postgrest  // for client.postgrest
-import io.github.jan.supabase.storage.storage      // for client.storage
-import io.github.jan.supabase.realtime.realtime    // for client.realtime
-import io.github.jan.supabase.functions.functions  // for client.functions (when you call Edge Functions)
-import io.github.jan.supabase.SupabaseClient
-import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.postgrest.query.Order
-import io.github.jan.supabase.postgrest.query.filter.eq
-import io.github.jan.supabase.storage.storage
 import kotlin.time.Duration.Companion.minutes
-import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
-import io.github.jan.supabase.postgrest.query.Order
+import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.filter.eq
+import io.github.jan.supabase.postgrest.query.Order
+import io.github.jan.supabase.realtime.realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.PostgresAction
+import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.storage.storage
-import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.storage.from
-import kotlin.time.Duration.Companion.minutes
+
+
 
 
 class SupabaseTaskRepository {
@@ -63,9 +52,11 @@ class SupabaseTaskRepository {
         // subscribe to realtime changes, then reload
         val ch = Supa.client.realtime.channel("realtime:public:tasks")
         val job = launch(Dispatchers.IO) {
-            ch.postgresChangeFlow<PostgresAction>(schema = "public", table = "tasks")
+            ch.postgresChangeFlow<PostgresAction>(schema = "public") {
+                table = "tasks"
+            }
                 .onStart { ch.subscribe() }
-                .collect { emitAll() }
+                .collect { emitAll() } // any change -> refetch
         }
         awaitClose { job.cancel(); ch.unsubscribe() }
     }
@@ -105,12 +96,13 @@ class SupabaseTaskRepository {
         val key = "$uid/$taskId/${System.currentTimeMillis()}.jpg"
         ctx.contentResolver.openInputStream(localUri).use { input ->
             requireNotNull(input) { "Cannot open $localUri" }
-            Supa.client.storage.from("photos").upload(key, bytes)
+            val bytes = input.readBytes()
+            Supa.client.storage.from("photos").upload(key, bytes) { upsert = true }
         }
         Supa.client.postgrest.from("task_photos").insert(
             mapOf("user_id" to uid, "task_id" to taskId, "storage_path" to key)
         )
-        val signed = Supa.client.storage.from("photos").createSignedUrl(key, 60 * 60) // 1h
+        val signed = Supa.client.storage.from("photos").createSignedUrl(key, 60.minutes) // 1h
         return signed
     }
     suspend fun loadTasks(supabase: SupabaseClient, userId: String): List<Task> {
@@ -118,7 +110,7 @@ class SupabaseTaskRepository {
             .from("tasks")
             .select {
                 eq("user_id", userId)
-                order("due", Order.ASC)
+                order("due", order=Order.ASCENDING)
             }
             .decodeList<Task>() // your @Serializable data class
     }
@@ -130,8 +122,17 @@ class SupabaseTaskRepository {
     ): String {
         val storage = supabase.storage
         val bucket = storage.from("photos")
-        return bucket.createSignedUrl(path = storagePath, expiresIn = 10.minutes).signedUrl
+        return bucket.createSignedUrl(path = storagePath, expiresIn = 10.minutes)
     }
+
+    suspend fun rename(id: String, title: String) {
+        Supa.client.postgrest.from("tasks").update(mapOf("title" to title.trim())).eq("id", id)
+    }
+
+    suspend fun setPriority(id: String, priority: Int) {
+        Supa.client.postgrest.from("tasks").update(mapOf("priority" to priority)).eq("id", id)
+    }
+
 
     // Stream photos for a given task as signed URLs
     fun photosFlow(taskId: String): Flow<List<TaskPhoto>> = callbackFlow {
