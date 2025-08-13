@@ -144,7 +144,7 @@ private fun buildMonthGrid(ym: YearMonth): List<LocalDate> {
 @Composable
 private fun DayTimeline(
     tasks: List<Task>,
-    onDrag: (id: Long, newStart: LocalTime) -> Unit
+    onDrag: (id: String, newStart: LocalTime) -> Unit
 ) {
     val slotHeightDp = 56.dp
     val density = LocalDensity.current

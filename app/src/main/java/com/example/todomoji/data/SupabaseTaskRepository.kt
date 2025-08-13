@@ -29,6 +29,17 @@ import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.query.filter.eq
 import io.github.jan.supabase.storage.storage
 import kotlin.time.Duration.Companion.minutes
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Order
+import io.github.jan.supabase.postgrest.query.filter.eq
+import io.github.jan.supabase.realtime.channel
+import io.github.jan.supabase.realtime.PostgresAction
+import io.github.jan.supabase.storage.storage
+import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.storage.from
+import kotlin.time.Duration.Companion.minutes
+
 
 class SupabaseTaskRepository {
 
@@ -51,10 +62,12 @@ class SupabaseTaskRepository {
 
         // subscribe to realtime changes, then reload
         val ch = Supa.client.realtime.channel("realtime:public:tasks")
-        ch.postgresChangeFlow<PostgresAction>(schema = "public", table = "tasks")
-            .onStart { ch.subscribe() }
-            .collect { emitAll() }  // any change -> refetch
-        awaitClose { ch.unsubscribe() }
+        val job = launch(Dispatchers.IO) {
+            ch.postgresChangeFlow<PostgresAction>(schema = "public", table = "tasks")
+                .onStart { ch.subscribe() }
+                .collect { emitAll() }
+        }
+        awaitClose { job.cancel(); ch.unsubscribe() }
     }
 
     // CRUD
@@ -92,7 +105,7 @@ class SupabaseTaskRepository {
         val key = "$uid/$taskId/${System.currentTimeMillis()}.jpg"
         ctx.contentResolver.openInputStream(localUri).use { input ->
             requireNotNull(input) { "Cannot open $localUri" }
-            Supa.client.storage.from("photos").upload(key, input, upsert = true)
+            Supa.client.storage.from("photos").upload(key, bytes)
         }
         Supa.client.postgrest.from("task_photos").insert(
             mapOf("user_id" to uid, "task_id" to taskId, "storage_path" to key)
@@ -130,7 +143,7 @@ class SupabaseTaskRepository {
                 .eq("task_id", taskId)
                 .decodeList<TaskPhotoRow>()
             val urls = rows.map { row ->
-                val url = Supa.client.storage.from("photos").createSignedUrl(row.storage_path, 60 * 60)
+                val url = Supa.client.storage.from("photos").createSignedUrl(row.storage_path, 60.minutes)
                 TaskPhoto(url)
             }
             trySend(urls)

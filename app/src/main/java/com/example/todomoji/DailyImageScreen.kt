@@ -39,8 +39,8 @@ fun DailyImageScreen(
             todays.sortedBy { task -> order[task.id.toString()] ?: Int.MAX_VALUE }
         }
     }
-    val todaysPhotoUris = remember(ordered, photosByTask) {
-        ordered.flatMap { t -> photosByTask[t.id].orEmpty().map { it.uri } }
+    val todaysPhotoUris: List<String> = remember(ordered, photosByTask) {
+        ordered.flatMap { t -> photosByTask[t.id].orEmpty().map { it.url } }
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {

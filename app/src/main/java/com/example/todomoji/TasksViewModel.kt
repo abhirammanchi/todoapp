@@ -49,4 +49,23 @@ class TasksViewModel(
         val cur = _photos.value[taskId].orEmpty()
         _photos.update { it + (taskId to (cur + TaskPhoto(url))) }
     }
+    fun addToTimelineForDate(date: LocalDate, id: String) = viewModelScope.launch {
+        // simple default slot: 09:00–10:00
+        repo.schedule(id, LocalTime.of(9, 0), LocalTime.of(10, 0))
+    }
+
+    fun dragMove(id: String, newStart: LocalTime) = viewModelScope.launch {
+        // keep the same duration if we can guess it; fall back to 60m
+        val current = tasks.value.firstOrNull { it.id == id }
+        val durationMinutes = when {
+            current?.start != null && current.end != null ->
+                (java.time.Duration.between(current.start, current.end).toMinutes()).toInt().coerceAtLeast(15)
+            else -> 60
+        }
+        repo.schedule(id, newStart, newStart.plusMinutes(durationMinutes.toLong()))
+    }
+    fun rename(id: String, title: String) = viewModelScope.launch { repo.rename(id, title) }
+    fun setPriority(id: String, priority: Int) = viewModelScope.launch { repo.setPriority(id, priority) }
+
+
 }

@@ -41,7 +41,7 @@ import java.time.format.DateTimeFormatter
 fun TasksScreen(
     vm: TasksViewModel,
     dateVm: DateViewModel,
-    aiVm: AiViewModel
+    aiVm: AiViewModel,
     onSignOut: () -> Unit = {}
 ) {
     val ctx = LocalContext.current
@@ -61,11 +61,11 @@ fun TasksScreen(
     var newTitle by remember { mutableStateOf("") }
 
     // Camera
-    var pendingTaskId by remember { mutableStateOf<Long?>(null) }
+    var pendingTaskId by remember { mutableStateOf<String?>(null) }
     var pendingOutputUri by remember { mutableStateOf<Uri?>(null) }
     val takePictureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val taskId = pendingTaskId; val uri = pendingOutputUri
-        if (ok && taskId != null && uri != null) vm.addPhoto(taskId, uri.toString())
+        if (ok && taskId != null && uri != null) vm.addPhoto(taskId, uri, ctx)
         pendingTaskId = null; pendingOutputUri = null
     }
     val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
