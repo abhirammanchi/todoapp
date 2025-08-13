@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Manifest refers to this name -->
+    <style name="Theme.Todomoji" parent="Theme.Material3.DayNight.NoActionBar" />
+</resources>
