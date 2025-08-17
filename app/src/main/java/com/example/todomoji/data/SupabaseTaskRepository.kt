@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.example.todomoji.Supa
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -18,14 +19,14 @@ import java.time.LocalTime
 import kotlin.time.Duration.Companion.minutes
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.postgrest.query.filter.eq
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.storage.storage
-import io.github.jan.supabase.storage.from
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.SupabaseClient
 
 
 
@@ -39,10 +40,9 @@ class SupabaseTaskRepository {
     fun tasksFlow(): Flow<List<Task>> = callbackFlow {
         val pg = Supa.client.postgrest
         suspend fun emitAll() {
-            val rows = pg.from("tasks")
-                .select()
-                .eq("user_id", uid())
-                .decodeList<TaskRow>()
+            val rows = pg.from("tasks").select {
+                filter { eq("user_id", uid()) }
+            }.decodeList<TaskRow>()
             trySend(rows.map { it.toDomain() })
         }
 
@@ -58,7 +58,13 @@ class SupabaseTaskRepository {
                 .onStart { ch.subscribe() }
                 .collect { emitAll() } // any change -> refetch
         }
-        awaitClose { job.cancel(); ch.unsubscribe() }
+        awaitClose {
+            job.cancel()
+            launch(Dispatchers.IO + NonCancellable) {
+                ch.unsubscribe()
+            }
+
+        }
     }
 
     // CRUD
@@ -75,17 +81,23 @@ class SupabaseTaskRepository {
 
     suspend fun toggle(id: String, current: Boolean) {
         val pg = Supa.client.postgrest
-        pg.from("tasks").update(mapOf("completed" to !current)).eq("id", id)
+        pg.from("tasks").update(mapOf("completed" to !current)) {
+            filter { eq("id", id) }
+        }
     }
 
     suspend fun delete(id: String) {
-        Supa.client.postgrest.from("tasks").delete { eq("id", id) }
+        Supa.client.postgrest.from("tasks").delete {
+            filter { eq("id", id) }
+        }
     }
 
     suspend fun schedule(id: String, start: LocalTime?, end: LocalTime?) {
         Supa.client.postgrest.from("tasks")
             .update(mapOf("start" to start?.toString(), "end" to end?.toString()))
-            .eq("id", id)
+            {
+                filter { eq("id", id) }
+            }
     }
 
     // PHOTOS
@@ -106,13 +118,14 @@ class SupabaseTaskRepository {
         return signed
     }
     suspend fun loadTasks(supabase: SupabaseClient, userId: String): List<Task> {
-        return supabase
+        val rows = supabase.postgrest
             .from("tasks")
             .select {
-                eq("user_id", userId)
+                filter { eq("user_id", userId) }
                 order("due", order=Order.ASCENDING)
             }
-            .decodeList<Task>() // your @Serializable data class
+            .decodeList<TaskRow>() // your @Serializable data class
+        return rows.map { it.toDomain() }
     }
 
     // Example of signed URL (note Duration!):
@@ -126,11 +139,13 @@ class SupabaseTaskRepository {
     }
 
     suspend fun rename(id: String, title: String) {
-        Supa.client.postgrest.from("tasks").update(mapOf("title" to title.trim())).eq("id", id)
+        Supa.client.postgrest.from("tasks").update(mapOf("title" to title.trim()))
+        { filter { eq("id", id) } }
     }
 
     suspend fun setPriority(id: String, priority: Int) {
-        Supa.client.postgrest.from("tasks").update(mapOf("priority" to priority)).eq("id", id)
+        Supa.client.postgrest.from("tasks").update(mapOf("priority" to priority))
+        { filter {eq("id", id) } }
     }
 
 
@@ -138,23 +153,36 @@ class SupabaseTaskRepository {
     fun photosFlow(taskId: String): Flow<List<TaskPhoto>> = callbackFlow {
         val pg = Supa.client.postgrest
         suspend fun emitAll() {
-            val rows = pg.from("task_photos")
-                .select()
-                .eq("user_id", uid())
-                .eq("task_id", taskId)
-                .decodeList<TaskPhotoRow>()
-            val urls = rows.map { row ->
-                val url = Supa.client.storage.from("photos").createSignedUrl(row.storage_path, 60.minutes)
+            val rows: List<TaskPhotoRow> = pg
+                .from("task_photos")
+                .select {
+                    filter {
+                        eq("task_id", taskId)
+                    }
+                }
+                .decodeList()
+
+            val urls: List<TaskPhoto> = rows.map { row ->
+                val url: String = Supa.client.storage
+                    .from("photos")
+                    .createSignedUrl(row.storage_path, 60.minutes)
                 TaskPhoto(url)
             }
+
             trySend(urls)
         }
         CoroutineScope(Dispatchers.IO).launch { emitAll() }
 
         val ch = Supa.client.realtime.channel("realtime:public:task_photos")
-        ch.postgresChangeFlow<PostgresAction>(schema = "public", table = "task_photos")
+        ch.postgresChangeFlow<PostgresAction>(schema = "public") {
+            table = "task_photos"
+        }
             .onStart { ch.subscribe() }
             .collect { emitAll() }
-        awaitClose { ch.unsubscribe() }
+        awaitClose {
+            launch(Dispatchers.IO + NonCancellable) {
+                ch.unsubscribe()
+            }
+        }
     }
 }

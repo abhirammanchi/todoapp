@@ -141,8 +141,15 @@ implementation("io.github.jan-tennert.supabase:realtime-kt")
 implementation("io.github.jan-tennert.supabase:functions-kt")
 
 // Ktor engine for Supabase client
-implementation("io.ktor:ktor-client-cio:2.3.12")
+implementation(platform("io.ktor:ktor-bom:3.1.2"))
+implementation("io.ktor:ktor-client-cio")
+    // Engine used by Supabase (see stacktrace): CIO
+implementation("io.ktor:ktor-client-cio")
 
+    // Helpful plugins (Supabase uses Ktor features internally)
+implementation("io.ktor:ktor-client-logging")
+implementation("io.ktor:ktor-client-content-negotiation")
+implementation("io.ktor:ktor-serialization-kotlinx-json")
 // If minSdk < 26 (you are 24): enable desugaring
 coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
