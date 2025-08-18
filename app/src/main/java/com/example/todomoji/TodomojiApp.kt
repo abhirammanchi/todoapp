@@ -19,12 +19,15 @@ import com.example.todomoji.ai.AiService
 import com.example.todomoji.TasksVmFactory
 
 @Composable
-fun TodomojiApp(onSignOut: () -> Unit = {}) {
+fun TodomojiApp(userId: String,     onSignOut: () -> Unit = {}) {
     val nav = rememberNavController()
     val current = nav.currentBackStackEntryAsState().value?.destination?.route
 
     val dateVm: DateViewModel = viewModel()
-    val tasksVm: TasksViewModel = viewModel(factory = TasksVmFactory())
+    val tasksVm: TasksViewModel = viewModel(
+        key = userId,
+        factory = TasksVmFactory()
+    )
     val aiVm: AiViewModel = viewModel(
         factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {

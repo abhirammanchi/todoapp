@@ -132,12 +132,15 @@ fun TasksScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onSignOut) { Text("Log out") }
+            }
             // AI Rank header
             val aiState by aiVm.state.collectAsState()
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+
             ) {
                 Text(
                     if (aiState.caption.isNotBlank()) aiState.caption else "Plan your day",

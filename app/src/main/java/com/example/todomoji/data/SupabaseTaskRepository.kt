@@ -35,19 +35,28 @@ class SupabaseTaskRepository {
 
     private fun uid(): String =
         Supa.client.auth.currentUserOrNull()?.id ?: error("Not signed in")
+    private fun uidOrNull(): String? = Supa.client.auth.currentUserOrNull()?.id
 
     // Live list of ALL tasks for the user (you can filter by date in VM/UI)
     fun tasksFlow(): Flow<List<Task>> = callbackFlow {
+        val userId = uidOrNull()
+        if (userId == null) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
         val pg = Supa.client.postgrest
         suspend fun emitAll() {
             val rows = pg.from("tasks").select {
-                filter { eq("user_id", uid()) }
+                filter {
+                    eq("user_id", uid()) // always pair id + user filter for safety
+                }
             }.decodeList<TaskRow>()
             trySend(rows.map { it.toDomain() })
         }
 
         // initial load
-        CoroutineScope(Dispatchers.IO).launch { emitAll() }
+        CoroutineScope(Dispatchers.IO).launch { runCatching { emitAll() } }
 
         // subscribe to realtime changes, then reload
         val ch = Supa.client.realtime.channel("public:tasks")
@@ -55,13 +64,13 @@ class SupabaseTaskRepository {
             ch.postgresChangeFlow<PostgresAction>(schema = "public") {
                 table = "tasks"
             }
-                .onStart { ch.subscribe() }
-                .collect { emitAll() } // any change -> refetch
+                .onStart { runCatching { ch.subscribe() }  }
+                .collect { runCatching { emitAll() }  } // any change -> refetch
         }
         awaitClose {
             job.cancel()
-            launch(Dispatchers.IO + NonCancellable) {
-                ch.unsubscribe()
+            launch(Dispatchers.IO ) {
+                runCatching { ch.unsubscribe() }
             }
 
         }
@@ -82,13 +91,19 @@ class SupabaseTaskRepository {
     suspend fun toggle(id: String, current: Boolean) {
         val pg = Supa.client.postgrest
         pg.from("tasks").update(mapOf("completed" to !current)) {
-            filter { eq("id", id) }
+            filter {
+                eq("id", id)
+                eq("user_id", uid()) // always pair id + user filter for safety
+            }
         }
     }
 
     suspend fun delete(id: String) {
         Supa.client.postgrest.from("tasks").delete {
-            filter { eq("id", id) }
+            filter {
+                eq("id", id)
+                eq("user_id", uid()) // always pair id + user filter for safety
+            }
         }
     }
 
@@ -96,7 +111,10 @@ class SupabaseTaskRepository {
         Supa.client.postgrest.from("tasks")
             .update(mapOf("start" to start?.toString(), "end" to end?.toString()))
             {
-                filter { eq("id", id) }
+                filter {
+                    eq("id", id)
+                    eq("user_id", uid()) // always pair id + user filter for safety
+                }
             }
     }
 
@@ -140,23 +158,38 @@ class SupabaseTaskRepository {
 
     suspend fun rename(id: String, title: String) {
         Supa.client.postgrest.from("tasks").update(mapOf("title" to title.trim()))
-        { filter { eq("id", id) } }
+        { filter {
+            eq("id", id)
+            eq("user_id", uid()) // always pair id + user filter for safety
+        }
+        }
     }
 
     suspend fun setPriority(id: String, priority: Int) {
         Supa.client.postgrest.from("tasks").update(mapOf("priority" to priority))
-        { filter {eq("id", id) } }
+        { filter {
+            eq("id", id)
+            eq("user_id", uid()) // always pair id + user filter for safety
+        }
+        }
     }
 
 
     // Stream photos for a given task as signed URLs
     fun photosFlow(taskId: String): Flow<List<TaskPhoto>> = callbackFlow {
+        val userId = uidOrNull()
+        if (userId == null) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
         val pg = Supa.client.postgrest
         suspend fun emitAll() {
             val rows: List<TaskPhotoRow> = pg
                 .from("task_photos")
                 .select {
                     filter {
+                        eq("user_id", userId)
                         eq("task_id", taskId)
                     }
                 }
@@ -171,19 +204,20 @@ class SupabaseTaskRepository {
 
             trySend(urls)
         }
-        CoroutineScope(Dispatchers.IO).launch { emitAll() }
+        CoroutineScope(Dispatchers.IO).launch { runCatching { emitAll() } }
 
         val ch = Supa.client.realtime.channel("public:task_photos:$taskId")
         val job = launch(Dispatchers.IO) {
             ch.postgresChangeFlow<PostgresAction>(schema = "public") {
                 table = "task_photos"
             }
-                .onStart { ch.subscribe(blockUntilSubscribed = true) }
-                .collect { emitAll() }
+                .onStart { runCatching { ch.subscribe() } }
+                .collect { runCatching { emitAll() } }
         }
         awaitClose {
-            launch(Dispatchers.IO + NonCancellable) {
-                ch.unsubscribe()
+            job.cancel()
+            launch(Dispatchers.IO) {
+                runCatching { ch.unsubscribe() }
             }
         }
     }

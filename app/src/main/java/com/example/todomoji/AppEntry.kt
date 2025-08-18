@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.runtime.key
+
 
 @Composable
 fun AppEntry() {
@@ -14,6 +16,11 @@ fun AppEntry() {
         AuthScreen(vm = authVm)
     } else {
         // Pass sign-out action down so you can log out from the Tasks screen
-        TodomojiApp(onSignOut = { authVm.signOut() })
+        key(user!!.id) {
+            TodomojiApp(
+                userId = user!!.id,
+                onSignOut = { authVm.signOut() }
+            )
+        }
     }
 }
