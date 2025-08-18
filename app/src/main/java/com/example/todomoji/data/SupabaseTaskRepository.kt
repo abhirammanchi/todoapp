@@ -32,6 +32,8 @@ import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.storage.storage
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.functions.functions
+import io.github.jan.supabase.postgrest.query.filter.eq
 
 
 
@@ -165,37 +167,31 @@ class SupabaseTaskRepository {
 
 /** Insert a task and return its id (text/uuid from DB). */
 suspend fun addTaskReturningId(title: String, due: LocalDate): String {
-    val pg = Supa.client.postgrest
-    // Insert with `returning=representation` to get the row back
-    val inserted: List<TaskRow> = pg
+    val row = Supa.client.postgrest
         .from("tasks")
         .insert(
             TaskRowInsert(
                 user_id = uid(),
                 title = title.trim(),
                 due = due.toString()
-            ),
-            returning = io.github.jan.supabase.postgrest.query.Returning.Representation
-        )
-        .decodeList()
-
-    return inserted.first().id
+            )
+        ) { select() }     // request returning row
+        .decodeSingle<TaskRow>()
+    return row.id
 }
 
 /** Given an email, resolve user id via RPC and add as collaborator to a task. */
-suspend fun addCollaboratorByEmail(taskId: String, email: String): Boolean {
-    val pg = Supa.client.postgrest
-
-    // Call your SQL function resolve_user_by_email(text) -> uuid
-    val params: JsonObject = buildJsonObject { put("p_email", email.trim().lowercase()) }
-    val resolved: String? = pg.rpc("resolve_user_by_email", params).decodeAs<String?>()
-    val collaboratorId = resolved ?: return false
-
-    // Insert into join table
-    pg.from("task_collaborators").insert(
-        mapOf("task_id" to taskId, "user_id" to collaboratorId)
+suspend fun addCollaboratorByEmail(taskId: String, email: String) {
+    val profile = Supa.client.postgrest.from("profiles")
+        .select { eq("email", email) } { single() }
+        .decodeSingle<ProfileRow>()
+    Supa.client.postgrest.from("task_collaborators").insert(
+        mapOf(
+            "task_id" to taskId,
+            "owner_user_id" to uid(),
+            "collaborator_user_id" to profile.id
+        )
     )
-    return true
 }
 
 
@@ -246,16 +242,6 @@ suspend fun toggle(id: String, current: Boolean) {
         val signed = Supa.client.storage.from("photos").createSignedUrl(key, 60.minutes) // 1h
         return signed
     }
-    suspend fun loadTasks(supabase: SupabaseClient, userId: String): List<Task> {
-        val rows = supabase.postgrest
-            .from("tasks")
-            .select {
-                filter { eq("user_id", userId) }
-                order("due", order=Order.ASCENDING)
-            }
-            .decodeList<TaskRow>() // your @Serializable data class
-        return rows.map { it.toDomain(currentUserId = userId, shared = false) }
-    }
 
     // Example of signed URL (note Duration!):
     suspend fun signedPhotoUrl(
@@ -267,69 +253,37 @@ suspend fun toggle(id: String, current: Boolean) {
         return bucket.createSignedUrl(path = storagePath, expiresIn = 10.minutes)
     }
 
-    suspend fun rename(id: String, title: String) {
-        Supa.client.postgrest.from("tasks").update(mapOf("title" to title.trim()))
-        { filter {
-            eq("id", id)
-            eq("user_id", uid()) // always pair id + user filter for safety
-        }
-        }
-    }
+// Rename & setPriority (your UI calls these)
+suspend fun rename(id: String, newTitle: String) {
+    Supa.client.postgrest.from("tasks")
+        .update(mapOf("title" to newTitle.trim()))
+        .eq("id", id)
+}
 
-    suspend fun setPriority(id: String, priority: Int) {
-        Supa.client.postgrest.from("tasks").update(mapOf("priority" to priority))
-        { filter {
-            eq("id", id)
-            eq("user_id", uid()) // always pair id + user filter for safety
-        }
-        }
-    }
+suspend fun setPriority(id: String, priority: Int) {
+    Supa.client.postgrest.from("tasks")
+        .update(mapOf("priority" to priority))
+        .eq("id", id)
+}
 
 
     // Stream photos for a given task as signed URLs
     fun photosFlow(taskId: String): Flow<List<TaskPhoto>> = callbackFlow {
-        val userId = uidOrNull()
-        if (userId == null) {
-            trySend(emptyList())
-            close()
-            return@callbackFlow
-        }
-        val pg = Supa.client.postgrest
         suspend fun emitAll() {
-            val rows: List<TaskPhotoRow> = pg
-                .from("task_photos")
-                .select {
-                    filter {
-                        eq("user_id", userId)
-                        eq("task_id", taskId)
-                    }
-                }
-                .decodeList()
-
-            val urls: List<TaskPhoto> = rows.map { row ->
-                val url: String = Supa.client.storage
-                    .from("photos")
-                    .createSignedUrl(row.storage_path, 60.minutes)
-                TaskPhoto(url)
+            val rows = Supa.client.postgrest.from("task_photos")
+                .select { eq("task_id", taskId); eq("user_id", uid()) }
+                .decodeList<TaskPhotoRow>()
+            val urls = rows.map {
+                val signed = Supa.client.storage.from("photos")
+                    .createSignedUrl(it.storage_path, 60 * 60) // 1h
+                TaskPhoto(signed)
             }
-
             trySend(urls)
         }
-        CoroutineScope(Dispatchers.IO).launch { runCatching { emitAll() } }
-
-        val ch = Supa.client.realtime.channel("public:task_photos:$taskId")
-        val job = launch(Dispatchers.IO) {
-            ch.postgresChangeFlow<PostgresAction>(schema = "public") {
-                table = "task_photos"
-            }
-                .onStart { runCatching { ch.subscribe() } }
-                .collect { runCatching { emitAll() } }
-        }
-        awaitClose {
-            job.cancel()
-            launch(Dispatchers.IO) {
-                runCatching { ch.unsubscribe() }
-            }
-        }
+        val ch = Supa.client.realtime.channel("realtime:public:task_photos")
+        ch.postgresChangeFlow<PostgresAction>(schema = "public", table = "task_photos")
+            .onStart { ch.subscribe() }
+            .collect { emitAll() }
+        awaitClose { ch.unsubscribe() }
     }
 }

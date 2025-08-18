@@ -72,6 +72,11 @@ data class TaskRowInsertWithId(
     val due: String
 )
 
+@Serializable
+data class ProfileRow(
+    val id: String,
+    val email: String
+)
 // --- Mappers ---
 
 fun TaskRow.toDomain(currentUserId: String, shared: Boolean = (user_id != currentUserId)): Task = Task(

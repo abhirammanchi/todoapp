@@ -16,7 +16,7 @@ fun AppEntry() {
         AuthScreen(vm = authVm)
     } else {
         // Pass sign-out action down so you can log out from the Tasks screen
-        androidx.compose.runtime.key(user!!.id) {
+        key(user!!.id) {
             TodomojiApp(userId = user!!.id, onSignOut = { authVm.signOut() })
         }
     }
