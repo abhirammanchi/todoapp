@@ -50,7 +50,7 @@ class SupabaseTaskRepository {
         CoroutineScope(Dispatchers.IO).launch { emitAll() }
 
         // subscribe to realtime changes, then reload
-        val ch = Supa.client.realtime.channel("realtime:public:tasks")
+        val ch = Supa.client.realtime.channel("public:tasks")
         val job = launch(Dispatchers.IO) {
             ch.postgresChangeFlow<PostgresAction>(schema = "public") {
                 table = "tasks"
@@ -173,12 +173,14 @@ class SupabaseTaskRepository {
         }
         CoroutineScope(Dispatchers.IO).launch { emitAll() }
 
-        val ch = Supa.client.realtime.channel("realtime:public:task_photos")
-        ch.postgresChangeFlow<PostgresAction>(schema = "public") {
-            table = "task_photos"
+        val ch = Supa.client.realtime.channel("public:task_photos:$taskId")
+        val job = launch(Dispatchers.IO) {
+            ch.postgresChangeFlow<PostgresAction>(schema = "public") {
+                table = "task_photos"
+            }
+                .onStart { ch.subscribe(blockUntilSubscribed = true) }
+                .collect { emitAll() }
         }
-            .onStart { ch.subscribe() }
-            .collect { emitAll() }
         awaitClose {
             launch(Dispatchers.IO + NonCancellable) {
                 ch.unsubscribe()

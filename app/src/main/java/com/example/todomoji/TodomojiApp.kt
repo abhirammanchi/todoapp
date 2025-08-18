@@ -16,6 +16,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.todomoji.ai.AiService
+import com.example.todomoji.TasksVmFactory
 
 @Composable
 fun TodomojiApp(onSignOut: () -> Unit = {}) {
@@ -23,7 +24,7 @@ fun TodomojiApp(onSignOut: () -> Unit = {}) {
     val current = nav.currentBackStackEntryAsState().value?.destination?.route
 
     val dateVm: DateViewModel = viewModel()
-    val tasksVm: TasksViewModel = viewModel()
+    val tasksVm: TasksViewModel = viewModel(factory = TasksVmFactory())
     val aiVm: AiViewModel = viewModel(
         factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
