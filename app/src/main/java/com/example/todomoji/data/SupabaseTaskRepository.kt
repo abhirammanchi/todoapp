@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.JsonObject
+
 
 import java.time.LocalDate
 import java.time.LocalTime
@@ -30,6 +32,9 @@ import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.storage.storage
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.SupabaseClient
+
+
+
 
 
 
@@ -158,30 +163,43 @@ class SupabaseTaskRepository {
     }
 
 
-    suspend fun addCollaboratorByEmail(taskId: String, email: String) {
-        val collaboratorId = resolveUserIdByEmail(email)
-            ?: error("No account found for $email")
-        Supa.client.postgrest.from("task_collaborators").insert(
-            mapOf("task_id" to taskId, "user_id" to collaboratorId)
-        )
-    }
-
-
-    suspend fun addTaskReturningId(title: String, due: java.time.LocalDate): String {
-        val id = java.util.UUID.randomUUID().toString()
-        val pg = Supa.client.postgrest
-        pg.from("tasks").insert(
-            TaskRowInsertWithId(
-                id = id,
+/** Insert a task and return its id (text/uuid from DB). */
+suspend fun addTaskReturningId(title: String, due: LocalDate): String {
+    val pg = Supa.client.postgrest
+    // Insert with `returning=representation` to get the row back
+    val inserted: List<TaskRow> = pg
+        .from("tasks")
+        .insert(
+            TaskRowInsert(
                 user_id = uid(),
                 title = title.trim(),
                 due = due.toString()
-            )
+            ),
+            returning = io.github.jan.supabase.postgrest.query.Returning.Representation
         )
-        return id
-    }
+        .decodeList()
 
-    suspend fun toggle(id: String, current: Boolean) {
+    return inserted.first().id
+}
+
+/** Given an email, resolve user id via RPC and add as collaborator to a task. */
+suspend fun addCollaboratorByEmail(taskId: String, email: String): Boolean {
+    val pg = Supa.client.postgrest
+
+    // Call your SQL function resolve_user_by_email(text) -> uuid
+    val params: JsonObject = buildJsonObject { put("p_email", email.trim().lowercase()) }
+    val resolved: String? = pg.rpc("resolve_user_by_email", params).decodeAs<String?>()
+    val collaboratorId = resolved ?: return false
+
+    // Insert into join table
+    pg.from("task_collaborators").insert(
+        mapOf("task_id" to taskId, "user_id" to collaboratorId)
+    )
+    return true
+}
+
+
+suspend fun toggle(id: String, current: Boolean) {
         val pg = Supa.client.postgrest
         pg.from("tasks").update(mapOf("completed" to !current)) {
             filter {
