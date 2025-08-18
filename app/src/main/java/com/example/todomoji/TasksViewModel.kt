@@ -14,12 +14,13 @@ import java.time.LocalTime
 
 
 class TasksViewModel(
-    private val repo: SupabaseTaskRepository
+    private val repo: SupabaseTaskRepository,
+    private val userId: String
 ) : ViewModel() {
 
     // All tasks for the user; filter by date in UI
     val tasks: StateFlow<List<Task>> =
-        repo.tasksFlow().stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        repo.tasksFlow(userId).stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     // Per-task photos (signed URLs), cached in-memory
     private val _photos = MutableStateFlow<Map<String, List<TaskPhoto>>>(emptyMap())
@@ -38,6 +39,19 @@ class TasksViewModel(
     fun addTask(title: String, due: LocalDate) = viewModelScope.launch {
         if (title.isNotBlank()) repo.addTask(title, due)
     }
+
+    fun addTaskWithCollaborator(
+        title: String,
+        due: java.time.LocalDate,
+        collaboratorEmail: String?
+    ) = viewModelScope.launch {
+        val taskId = repo.addTaskReturningId(title, due)
+        if (!collaboratorEmail.isNullOrBlank()) {
+            runCatching { repo.addCollaboratorByEmail(taskId, collaboratorEmail) }
+                .onFailure { /* optionally expose a snackbar / state error */ }
+        }
+    }
+
 
     fun toggle(taskId: String, currentCompleted: Boolean) = viewModelScope.launch {
         repo.toggle(taskId, currentCompleted)

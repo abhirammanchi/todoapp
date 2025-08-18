@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
 import java.time.LocalDate
 import java.time.LocalTime
 // For SupabaseTaskRepository.kt (or wherever used)
@@ -35,46 +38,98 @@ class SupabaseTaskRepository {
 
     private fun uid(): String =
         Supa.client.auth.currentUserOrNull()?.id ?: error("Not signed in")
+
     private fun uidOrNull(): String? = Supa.client.auth.currentUserOrNull()?.id
 
     // Live list of ALL tasks for the user (you can filter by date in VM/UI)
-    fun tasksFlow(): Flow<List<Task>> = callbackFlow {
-        val userId = uidOrNull()
-        if (userId == null) {
-            trySend(emptyList())
-            close()
-            return@callbackFlow
-        }
-        val pg = Supa.client.postgrest
-        suspend fun emitAll() {
-            val rows = pg.from("tasks").select {
-                filter {
-                    eq("user_id", uid()) // always pair id + user filter for safety
+    fun tasksFlow(userId: String): kotlinx.coroutines.flow.Flow<List<Task>> =
+        kotlinx.coroutines.flow.callbackFlow {
+            val pg = Supa.client.postgrest
+
+            suspend fun fetchOwned(): List<TaskRow> =
+                pg.from("tasks").select {
+                    filter { eq("user_id", userId) }
+                }.decodeList()
+
+            suspend fun fetchSharedIds(): List<String> =
+                pg.from("task_collaborators").select {
+                    filter { eq("user_id", userId) }
+                }.decodeList<TaskCollaboratorRow>().map { it.task_id }
+
+            suspend fun fetchTasksByIds(ids: List<String>): List<TaskRow> {
+                if (ids.isEmpty()) return emptyList()
+                val chunks = ids.chunked(25)
+                val results = mutableListOf<TaskRow>()
+                for (chunk in chunks) {
+                    val rows = pg.from("tasks").select {
+                        filter {
+                            // If your DSL has IN: inList("id", chunk)
+                            // Fallback: OR each id
+                            or { chunk.forEach { eq("id", it) } }
+                        }
+                    }.decodeList<TaskRow>()
+                    results += rows
                 }
-            }.decodeList<TaskRow>()
-            trySend(rows.map { it.toDomain() })
-        }
-
-        // initial load
-        CoroutineScope(Dispatchers.IO).launch { runCatching { emitAll() } }
-
-        // subscribe to realtime changes, then reload
-        val ch = Supa.client.realtime.channel("public:tasks")
-        val job = launch(Dispatchers.IO) {
-            ch.postgresChangeFlow<PostgresAction>(schema = "public") {
-                table = "tasks"
-            }
-                .onStart { runCatching { ch.subscribe() }  }
-                .collect { runCatching { emitAll() }  } // any change -> refetch
-        }
-        awaitClose {
-            job.cancel()
-            launch(Dispatchers.IO ) {
-                runCatching { ch.unsubscribe() }
+                return results
             }
 
+            suspend fun emitAll() {
+                val owned = fetchOwned()
+                val sharedIds = fetchSharedIds()
+                val sharedRows = fetchTasksByIds(sharedIds)
+                val collabIdSet = sharedIds.toSet()
+                val all = (owned + sharedRows).distinctBy { it.id }
+                trySend(all.map { row ->
+                    row.toDomain(
+                        currentUserId = userId,
+                        shared = row.id in collabIdSet || row.user_id != userId
+                    )
+                })
+            }
+
+            // initial load
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+                .launch { runCatching { emitAll() } }
+
+            // realtime: tasks
+            val chTasks = Supa.client.realtime.channel("public:tasks")
+            val jobTasks = launch(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    chTasks.postgresChangeFlow<io.github.jan.supabase.realtime.PostgresAction>(
+                        schema = "public"
+                    ) {
+                        table = "tasks"
+                    }
+                        .onStart { runCatching { chTasks.subscribe(blockUntilSubscribed = true) } }
+                        .collect { runCatching { emitAll() } }
+                }
+            }
+
+            // realtime: collaborators
+            val chCollab = Supa.client.realtime.channel("public:task_collaborators")
+            val jobCollab = launch(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    chCollab.postgresChangeFlow<io.github.jan.supabase.realtime.PostgresAction>(
+                        schema = "public"
+                    ) {
+                        table = "task_collaborators"
+                    }
+                        .onStart { runCatching { chCollab.subscribe(blockUntilSubscribed = true) } }
+                        .collect { runCatching { emitAll() } }
+                }
+            }
+
+            awaitClose {
+                jobTasks.cancel(); jobCollab.cancel()
+                launch(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+                    runCatching { chTasks.unsubscribe() }
+                    runCatching { chCollab.unsubscribe() }
+                }
+            }
         }
-    }
+}
+
+
 
     // CRUD
     suspend fun addTask(title: String, due: LocalDate) {
@@ -86,6 +141,44 @@ class SupabaseTaskRepository {
                 due = due.toString()
             )
         )
+    }
+
+    private suspend fun resolveUserIdByEmail(email: String): String? {
+        val pg = Supa.client.postgrest
+        // rpc parameters must be a JsonObject (not Map)
+        // decodeAs<T>() doesn't accept nullable T, so wrap in runCatching and return null on failure
+        return runCatching {
+            pg.rpc(
+                function = "resolve_user_by_email",
+                parameters = buildJsonObject {
+                    put("p_email", email.trim().lowercase())
+                }
+            ).decodeAs<String>()   // returns the uuid; throws if null → handled by runCatching
+        }.getOrNull()
+    }
+
+
+    suspend fun addCollaboratorByEmail(taskId: String, email: String) {
+        val collaboratorId = resolveUserIdByEmail(email)
+            ?: error("No account found for $email")
+        Supa.client.postgrest.from("task_collaborators").insert(
+            mapOf("task_id" to taskId, "user_id" to collaboratorId)
+        )
+    }
+
+
+    suspend fun addTaskReturningId(title: String, due: java.time.LocalDate): String {
+        val id = java.util.UUID.randomUUID().toString()
+        val pg = Supa.client.postgrest
+        pg.from("tasks").insert(
+            TaskRowInsertWithId(
+                id = id,
+                user_id = uid(),
+                title = title.trim(),
+                due = due.toString()
+            )
+        )
+        return id
     }
 
     suspend fun toggle(id: String, current: Boolean) {
@@ -143,7 +236,7 @@ class SupabaseTaskRepository {
                 order("due", order=Order.ASCENDING)
             }
             .decodeList<TaskRow>() // your @Serializable data class
-        return rows.map { it.toDomain() }
+        return rows.map { it.toDomain(currentUserId = userId, shared = false) }
     }
 
     // Example of signed URL (note Duration!):

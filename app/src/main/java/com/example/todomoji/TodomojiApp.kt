@@ -26,7 +26,7 @@ fun TodomojiApp(userId: String,     onSignOut: () -> Unit = {}) {
     val dateVm: DateViewModel = viewModel()
     val tasksVm: TasksViewModel = viewModel(
         key = userId,
-        factory = TasksVmFactory()
+        factory = TasksVmFactory(userId)
     )
     val aiVm: AiViewModel = viewModel(
         factory = object : ViewModelProvider.Factory {

@@ -36,6 +36,12 @@ import com.example.todomoji.data.Task
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.format.DateTimeFormatter
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+
+
 
 @Composable
 fun TasksScreen(
@@ -59,6 +65,8 @@ fun TasksScreen(
 
     var showAdd by remember { mutableStateOf(false) }
     var newTitle by remember { mutableStateOf("") }
+    var collabEmail by remember { mutableStateOf("") }
+
 
     // Camera
     var pendingTaskId by remember { mutableStateOf<String?>(null) }
@@ -172,6 +180,7 @@ fun TasksScreen(
                         task = task,
                         photos = photos,
 
+
                         // ③ toggle now needs current completed state
                         onToggle = { vm.toggle(task.id, task.completed) },
 
@@ -204,18 +213,35 @@ fun TasksScreen(
                     onDismissRequest = { showAdd = false },
                     title = { Text("New task") },
                     text = {
-                        OutlinedTextField(
-                            value = newTitle,
-                            onValueChange = { newTitle = it },
-                            singleLine = true,
-                            label = { Text("Task title") }
-                        )
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = newTitle,
+                                onValueChange = { newTitle = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                label = { Text("Task title") }
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = collabEmail,
+                                onValueChange = { collabEmail = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                label = { Text("Collaborator email (optional)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                            )
+                        }
                     },
                     confirmButton = {
                         Button(
                             onClick = {
-                                vm.addTask(newTitle, selectedDate)
+                                vm.addTaskWithCollaborator(
+                                    title = newTitle,
+                                    due = selectedDate,                   // you already have this date state
+                                    collaboratorEmail = collabEmail.ifBlank { null }
+                                )
                                 newTitle = ""
+                                collabEmail = ""
                                 showAdd = false
                             },
                             enabled = newTitle.isNotBlank()

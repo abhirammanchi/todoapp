@@ -4,12 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.todomoji.data.SupabaseTaskRepository
 
-class TasksVmFactory : ViewModelProvider.Factory {
+class TasksVmFactory(private val userId: String) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(TasksViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return TasksViewModel(SupabaseTaskRepository()) as T
-        }
-        throw IllegalArgumentException("Unknown VM ${modelClass.name}")
+        val repo = SupabaseTaskRepository()
+        @Suppress("UNCHECKED_CAST")
+        return TasksViewModel(repo, userId) as T
     }
 }

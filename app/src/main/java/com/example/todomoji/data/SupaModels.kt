@@ -43,28 +43,46 @@ data class TaskPhotoRow(
 
 data class Task(
     val id: String,                  // NOTE: now String (UUID)
+    val userId: String,
     val title: String,
     val completed: Boolean,
     val due: LocalDate,
     val start: LocalTime?,
     val end: LocalTime?,
     val priority: Int,
-    val note: String?
+    val note: String?,
+    val shared: Boolean
 )
 
 data class TaskPhoto(
     val url: String                  // signed URL or local content Uri string
 )
 
+@kotlinx.serialization.Serializable
+data class TaskCollaboratorRow(
+    val task_id: String,
+    val user_id: String
+)
+
+@kotlinx.serialization.Serializable
+data class TaskRowInsertWithId(
+    val id: String,
+    val user_id: String,
+    val title: String,
+    val due: String
+)
+
 // --- Mappers ---
 
-fun TaskRow.toDomain(): Task = Task(
+fun TaskRow.toDomain(currentUserId: String, shared: Boolean = (user_id != currentUserId)): Task = Task(
     id = id,
+    userId = user_id,
     title = title,
     completed = completed,
     due = LocalDate.parse(due),
     start = start?.let(LocalTime::parse),
     end = end?.let(LocalTime::parse),
-    priority = priority,
-    note = note
+    priority = priority ?: 0,
+    note = note,
+    shared = shared
 )
