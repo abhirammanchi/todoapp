@@ -27,8 +27,12 @@ import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.storage.storage // <-- REQUIRED
 
-
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collectLatest
+import android.util.Log
 class SupabaseTaskRepository {
+    // manual refresh trigger (no imports needed)
+    private val refresh = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     private fun uid(): String =
         Supa.client.auth.currentUserOrNull()?.id ?: error("Not signed in")
@@ -83,20 +87,22 @@ class SupabaseTaskRepository {
         }
 
         // initial load
-        launch(Dispatchers.IO) { runCatching { emitAll() } }
+        launch(Dispatchers.IO) {
+            try { emitAll() } catch (t: Throwable) { Log.e("TasksRepo", "emitAll failed", t) }
+        }
 
         // realtime: tasks
         val chTasks = Supa.client.realtime.channel("public:tasks")
         val jobTasks = launch(Dispatchers.IO) {
-            runCatching {
                 chTasks.postgresChangeFlow<PostgresAction>(schema = "public") {
                     table = "tasks"
                 }.onStart {
                     runCatching { chTasks.subscribe(blockUntilSubscribed = true) }
-                }.collect { runCatching { emitAll() } }
-            }
+                }.collect {  try { emitAll() } catch (t: Throwable) { Log.e("TasksRepo", "emitAll realtime tasks", t) } }
         }
-
+        val jobManual = launch(kotlinx.coroutines.Dispatchers.IO) {
+            refresh.collect {  try { emitAll() } catch (t: Throwable) { Log.e("TasksRepo", "emitAll realtime tasks", t) } }
+        }
         // realtime: collaborators
         val chCollab = Supa.client.realtime.channel("public:task_collaborators")
         val jobCollab = launch(Dispatchers.IO) {
@@ -107,6 +113,9 @@ class SupabaseTaskRepository {
                     runCatching { chCollab.subscribe(blockUntilSubscribed = true) }
                 }.collect { runCatching { emitAll() } }
             }
+        }
+        val jobRefresh = launch(Dispatchers.IO) {
+            refresh.collectLatest { try { emitAll() } catch (t: Throwable) { Log.e("TasksRepo", "emitAll refresh", t) } }
         }
 
         awaitClose {
@@ -128,6 +137,7 @@ class SupabaseTaskRepository {
                 due = due.toString()
             )
         )
+        refresh.tryEmit(Unit)
     }
 
     /** Insert and return the new id */
@@ -145,6 +155,7 @@ class SupabaseTaskRepository {
                 select()
             }
             .decodeSingle<TaskRow>()
+        refresh.tryEmit(Unit)
         return row.id
     }
 
@@ -160,6 +171,7 @@ class SupabaseTaskRepository {
 
         Supa.client.postgrest.from("task_collaborators")
             .insert(mapOf("task_id" to taskId, "user_id" to profile.id))
+        refresh.tryEmit(Unit)
     }
 
 
@@ -169,12 +181,14 @@ class SupabaseTaskRepository {
         ) {
             filter{eq("id", id)}
         }
+        refresh.tryEmit(Unit)
     }
 
     suspend fun delete(id: String) {
         Supa.client.postgrest.from("tasks").delete {
             filter{eq("id", id)}
         }
+        refresh.tryEmit(Unit)
     }
 
     suspend fun schedule(id: String, start: LocalTime?, end: LocalTime?) {
@@ -183,18 +197,21 @@ class SupabaseTaskRepository {
         ) {
             filter{ eq("id", id) }
         }
+        refresh.tryEmit(Unit)
     }
 
     suspend fun rename(id: String, title: String) {
         Supa.client.postgrest.from("tasks").update(mapOf("title" to title.trim())) {
             filter{ eq("id", id) }
         }
+        refresh.tryEmit(Unit)
     }
 
     suspend fun setPriority(id: String, priority: Int) {
         Supa.client.postgrest.from("tasks").update(mapOf("priority" to priority)) {
             filter{ eq("id", id) }
         }
+        refresh.tryEmit(Unit)
     }
 
     // ---------- PHOTOS ----------
