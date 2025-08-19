@@ -21,9 +21,9 @@ fun DailyImageScreen(
     posterVm: DailyImageViewModel = viewModel()
 ) {
     val ctx = LocalContext.current
-    val date by dateVm.selected.collectAsState()
-    val tasks by tasksVm.tasks.collectAsState()
-    val photosByTask by tasksVm.photos.collectAsState()
+    val date by dateVm.selected.collectAsState(initial = java.time.LocalDate.now())
+    val tasks by tasksVm.tasks.collectAsState(initial = emptyList())
+    val photosByTask by tasksVm.photos.collectAsState(initial = emptyMap())
     val aiState by aiVm.state.collectAsState()
     val posterState by posterVm.state.collectAsState()
 
@@ -40,7 +40,9 @@ fun DailyImageScreen(
         }
     }
     val todaysPhotoUris: List<String> = remember(ordered, photosByTask) {
-        ordered.flatMap { t -> photosByTask[t.id].orEmpty().map { it.url } }
+        ordered.flatMap { t ->
+            (photosByTask[t.id] ?: emptyList()).map { p -> p.url }
+        }
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {

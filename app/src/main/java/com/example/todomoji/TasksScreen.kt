@@ -53,8 +53,8 @@ fun TasksScreen(
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val tasks by vm.tasks.collectAsState()
-    val photosByTask by vm.photos.collectAsState()
+    val tasks by vm.tasks.collectAsState(initial = emptyList())
+    val photosByTask by vm.photos.collectAsState(initial = emptyMap())
     val selectedDate by dateVm.selected.collectAsState()
     val fmt = remember { DateTimeFormatter.ISO_LOCAL_DATE }
 
@@ -182,10 +182,10 @@ fun TasksScreen(
 
 
                         // ③ toggle now needs current completed state
-                        onToggle = { vm.toggle(task.id, task.completed) },
+                        onToggle = { vm.toggleCompleted(task.id, task.completed) },
 
                         onDelete = {
-                            val t = task; vm.delete(t.id); deleted = t
+                            val t = task; vm.deleteTask(t.id); deleted = t
                             scope.launch {
                                 val res = snackbarHostState.showSnackbar("Task deleted", actionLabel = "Undo")
                                 if (res == SnackbarResult.ActionPerformed) {

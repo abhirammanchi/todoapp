@@ -66,7 +66,7 @@ fun PlanScreen(dateVm: DateViewModel, tasksVm: TasksViewModel) {
                             Text(t.title, fontWeight = FontWeight.Medium)
                             Spacer(Modifier.height(6.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = { tasksVm.addToTimelineForDate(date, t.id) }) {
+                                OutlinedButton(onClick = { tasksVm.addToTimelineForDate(taskId = t.id, date = date) }) {
                                     Text("Add to timeline")
                                 }
                             }
