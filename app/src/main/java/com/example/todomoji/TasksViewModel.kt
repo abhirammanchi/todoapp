@@ -2,17 +2,20 @@ package com.example.todomoji
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.todomoji.data.SupabaseTaskRepository
 import com.example.todomoji.data.Task
 import com.example.todomoji.data.TaskPhoto
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
+import java.util.Collections.list
 
 class TasksViewModel(
     private val repo: SupabaseTaskRepository,
@@ -20,8 +23,27 @@ class TasksViewModel(
 ) : ViewModel() {
 
     // Stream of tasks (owned + shared) keyed by user
-    val tasks = repo.tasksFlow(userId)
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    private val _tasks = kotlinx.coroutines.flow.MutableStateFlow<List<Task>>(emptyList())
+    val tasks: kotlinx.coroutines.flow.StateFlow<List<Task>> get() = _tasks
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Load once (owned tasks)
+                val loaded = repo.loadTasks(com.example.todomoji.Supa.client, userId)
+                Log.d("TasksVM", "loaded=${loaded.size}, sample=${loaded.firstOrNull()}")
+                _tasks.value = loaded
+
+                // (Keep the streaming flow disabled for now)
+                // viewModelScope.launch { repo.tasksFlow(userId).collect { _tasks.value = it } }
+            } catch (t: Throwable) {
+                Log.e("TasksVM", "loadedTasks failed", t)
+                _tasks.value = emptyList()
+
+
+            }
+        }
+    }
 
     // Photos for a task
     private val _photos =

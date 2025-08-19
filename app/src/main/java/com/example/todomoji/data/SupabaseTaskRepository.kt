@@ -30,6 +30,8 @@ import io.github.jan.supabase.storage.storage // <-- REQUIRED
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import android.util.Log
+import kotlinx.serialization.json.jsonPrimitive
+
 class SupabaseTaskRepository {
     // manual refresh trigger (no imports needed)
     private val refresh = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -62,9 +64,8 @@ class SupabaseTaskRepository {
             val acc = mutableListOf<TaskRow>()
             for (chunk in chunks) {
                 // IN requires raw PostgREST syntax as a string
-                val inValue = chunk.joinToString(prefix = "(", postfix = ")", separator = ",") { "'$it'" }
                 val rows = pg.from("tasks").select {
-                    filter{eq("id", inValue)}
+                    filter { or { chunk.forEach { eq("id", it) } } }
                 }.decodeList<TaskRow>()
                 acc += rows
             }
@@ -73,10 +74,18 @@ class SupabaseTaskRepository {
 
         suspend fun emitAll() {
             val owned = fetchOwned()
-            val sharedIds = fetchSharedIds()
-            val shared = fetchTasksByIds(sharedIds)
-            val collabIdSet = sharedIds.toSet()
+            // ✅ always emit owned first so UI isn’t empty
+            trySend(owned.map { row ->
+                row.toDomain(currentUserId = userId, shared = false)
+            })
 
+            // now try shared, but never fail the whole thing
+            val sharedIds = runCatching { fetchSharedIds() }.getOrElse { emptyList() }
+            val shared = if (sharedIds.isEmpty()) emptyList() else runCatching {
+                fetchTasksByIds(sharedIds)
+            }.getOrElse { emptyList() }
+
+            val collabIdSet = sharedIds.toSet()
             val all = (owned + shared).distinctBy { it.id }.map { row ->
                 row.toDomain(
                     currentUserId = userId,
@@ -86,13 +95,20 @@ class SupabaseTaskRepository {
             trySend(all)
         }
 
+
         // initial load
         launch(Dispatchers.IO) {
-            try { emitAll() } catch (t: Throwable) { Log.e("TasksRepo", "emitAll failed", t) }
+            try {
+                emitAll()
+                Log.d("TasksRepo", "initial emitAll OK")
+            } catch (t: Throwable) {
+                Log.e("TasksRepo", "emitAll failed", t)
+            }
         }
 
+
         // realtime: tasks
-        val chTasks = Supa.client.realtime.channel("public:tasks")
+        val chTasks = Supa.client.realtime.channel("realtime:public:tasks")
         val jobTasks = launch(Dispatchers.IO) {
                 chTasks.postgresChangeFlow<PostgresAction>(schema = "public") {
                     table = "tasks"
@@ -100,11 +116,8 @@ class SupabaseTaskRepository {
                     runCatching { chTasks.subscribe(blockUntilSubscribed = true) }
                 }.collect {  try { emitAll() } catch (t: Throwable) { Log.e("TasksRepo", "emitAll realtime tasks", t) } }
         }
-        val jobManual = launch(kotlinx.coroutines.Dispatchers.IO) {
-            refresh.collect {  try { emitAll() } catch (t: Throwable) { Log.e("TasksRepo", "emitAll realtime tasks", t) } }
-        }
-        // realtime: collaborators
-        val chCollab = Supa.client.realtime.channel("public:task_collaborators")
+      // realtime: collaborators
+        val chCollab = Supa.client.realtime.channel("realtime:public:task_collaborators")
         val jobCollab = launch(Dispatchers.IO) {
             runCatching {
                 chCollab.postgresChangeFlow<PostgresAction>(schema = "public") {
@@ -161,18 +174,47 @@ class SupabaseTaskRepository {
 
     /** collaboratorEmail -> user uuid via rpc('resolve_user_by_email') */
     suspend fun addCollaboratorByEmail(taskId: String, email: String) {
-        val profile = Supa.client.postgrest
-            .from("profiles")
-            .select {
-                filter { eq("email", email.trim().lowercase()) }
-            }
-            .decodeList<ProfileRow>()
-            .firstOrNull() ?: return
+        val payload = kotlinx.serialization.json.JsonObject(
+            mapOf("p_email" to kotlinx.serialization.json.JsonPrimitive(email.trim().lowercase()))
+        )
 
-        Supa.client.postgrest.from("task_collaborators")
-            .insert(mapOf("task_id" to taskId, "user_id" to profile.id))
-        refresh.tryEmit(Unit)
+        val res = try {
+            Supa.client.postgrest.rpc(function = "get_user_id_by_email", parameters = payload)
+        } catch (t: Throwable) {
+            android.util.Log.e("TasksRepo", "rpc call failed", t)
+            return
+        }
+
+        // Robustly extract UUID from any of these shapes:
+        // 1) "uuid-string"
+        // 2) {"get_user_id_by_email":"uuid-string"}
+        // 3) ["uuid-string"]
+        val collaboratorId = try {
+            val el = res.decodeAs<kotlinx.serialization.json.JsonElement>()
+            when (el) {
+                is kotlinx.serialization.json.JsonPrimitive -> el.content
+                is kotlinx.serialization.json.JsonObject -> el.values.firstOrNull()?.jsonPrimitive?.content
+                is kotlinx.serialization.json.JsonArray -> el.firstOrNull()?.jsonPrimitive?.content
+                else -> null
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("TasksRepo", "rpc decode failed", t)
+            null
+        } ?: return
+
+        try {
+            Supa.client.postgrest.from("task_collaborators")
+                .insert(mapOf("task_id" to taskId, "user_id" to collaboratorId))
+            android.util.Log.d("TasksRepo", "inserted collaborator row for $collaboratorId")
+            refresh.tryEmit(Unit)
+        } catch (t: Throwable) {
+            android.util.Log.e("TasksRepo", "insert collaborator failed", t)
+        }
     }
+
+
+
+
 
 
     suspend fun toggle(id: String, currentCompleted: Boolean) {
@@ -255,7 +297,7 @@ class SupabaseTaskRepository {
 
         launch(Dispatchers.IO) { runCatching { emitAll() } }
 
-        val ch = Supa.client.realtime.channel("public:task_photos")
+        val ch = Supa.client.realtime.channel("realtime:public:task_photos")
         val job = launch(Dispatchers.IO) {
             runCatching {
                 ch.postgresChangeFlow<PostgresAction>(schema = "public") { table = "task_photos" }
