@@ -35,7 +35,7 @@ class TasksViewModel(
                 _tasks.value = loaded
 
                 // (Keep the streaming flow disabled for now)
-                // viewModelScope.launch { repo.tasksFlow(userId).collect { _tasks.value = it } }
+                viewModelScope.launch { repo.tasksFlow(userId).collect { _tasks.value = it } }
             } catch (t: Throwable) {
                 Log.e("TasksVM", "loadedTasks failed", t)
                 _tasks.value = emptyList()
